@@ -6,7 +6,7 @@ const fs = require("fs");
 const os = require("os");
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 const DOWNLOAD_DIR = path.join(os.tmpdir(), "yt-dlp-downloads");
