@@ -12,18 +12,29 @@ app.use(express.json());
 const DOWNLOAD_DIR = path.join(os.tmpdir(), "yt-dlp-downloads");
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
-// Download yt-dlp binary on startup
-const YTDLP_PATH = "/tmp/yt-dlp";
+// Install yt-dlp via pip (most reliable on Railway)
+let YTDLP_PATH = "yt-dlp";
 try {
-  if (!fs.existsSync(YTDLP_PATH)) {
-    console.log("Downloading yt-dlp...");
-    execSync(`curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ${YTDLP_PATH} && chmod +x ${YTDLP_PATH}`);
-    console.log("yt-dlp ready!");
-  } else {
-    console.log("yt-dlp already present.");
-  }
+  console.log("Installing yt-dlp via pip...");
+  execSync("pip install -q yt-dlp", { stdio: "inherit" });
+  YTDLP_PATH = execSync("which yt-dlp").toString().trim();
+  console.log("yt-dlp ready at:", YTDLP_PATH);
 } catch(e) {
-  console.error("Failed to download yt-dlp:", e.message);
+  try {
+    console.log("pip failed, trying pip3...");
+    execSync("pip3 install -q yt-dlp", { stdio: "inherit" });
+    YTDLP_PATH = execSync("which yt-dlp").toString().trim();
+    console.log("yt-dlp ready at:", YTDLP_PATH);
+  } catch(e2) {
+    try {
+      console.log("Trying wget...");
+      execSync("wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /tmp/yt-dlp && chmod +x /tmp/yt-dlp");
+      YTDLP_PATH = "/tmp/yt-dlp";
+      console.log("yt-dlp ready via wget!");
+    } catch(e3) {
+      console.error("All install methods failed:", e3.message);
+    }
+  }
 }
 
 const QUALITY_MAP = {
