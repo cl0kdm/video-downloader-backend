@@ -14,26 +14,34 @@ const DOWNLOAD_DIR = path.join(os.tmpdir(), "yt-dlp-downloads");
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
 const YTDLP_PATH = "/tmp/yt-dlp";
+let ytdlpReady = false;
 
-// Download yt-dlp binary using Node.js https (no curl/wget needed)
 function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
+    const file = fs.createWriteStream(dest, { mode: 0o755 });
     const request = (reqUrl) => {
       https.get(reqUrl, (res) => {
-        // Follow redirects
-        if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) {
-          file.close();
+        if ([301,302,307,308].includes(res.statusCode)) {
           request(res.headers.location);
           return;
         }
         if (res.statusCode !== 200) {
-          reject(new Error(`Failed to download: HTTP ${res.statusCode}`));
+          reject(new Error(`HTTP ${res.statusCode}`));
           return;
         }
         res.pipe(file);
-        file.on("finish", () => { file.close(); resolve(); });
-        file.on("error", reject);
+        file.on("finish", () => {
+          file.close(() => {
+            // Set executable permission after file is fully closed
+            try {
+              fs.chmodSync(dest, 0o755);
+              resolve();
+            } catch(e) {
+              reject(e);
+            }
+          });
+        });
+        file.on("error", (e) => { fs.unlink(dest, () => {}); reject(e); });
       }).on("error", reject);
     };
     request(url);
@@ -43,18 +51,20 @@ function downloadFile(url, dest) {
 async function installYtDlp() {
   try {
     if (fs.existsSync(YTDLP_PATH)) {
-      console.log("yt-dlp already installed.");
+      fs.chmodSync(YTDLP_PATH, 0o755);
+      ytdlpReady = true;
+      console.log("yt-dlp already installed and ready.");
       return;
     }
-    console.log("Downloading yt-dlp binary...");
+    console.log("Downloading yt-dlp...");
     await downloadFile(
       "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
       YTDLP_PATH
     );
-    fs.chmodSync(YTDLP_PATH, 0o755);
+    ytdlpReady = true;
     console.log("yt-dlp installed successfully!");
-  } catch (e) {
-    console.error("Failed to install yt-dlp:", e.message);
+  } catch(e) {
+    console.error("yt-dlp install failed:", e.message);
   }
 }
 
@@ -67,10 +77,14 @@ const QUALITY_MAP = {
   "Audio only (MP3)": "bestaudio/best",
 };
 
+function notReady(res) {
+  return res.status(503).json({ error: "yt-dlp is still installing, please wait 30 seconds and try again." });
+}
+
 app.post("/api/info", (req, res) => {
+  if (!ytdlpReady) return notReady(res);
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
-  if (!fs.existsSync(YTDLP_PATH)) return res.status(500).json({ error: "yt-dlp not ready yet, please wait a moment and try again." });
   const ytdlp = spawn(YTDLP_PATH, ["--dump-json", "--no-playlist", url]);
   let stdout = "", stderr = "";
   ytdlp.stdout.on("data", c => stdout += c);
@@ -91,9 +105,9 @@ app.post("/api/info", (req, res) => {
 });
 
 app.post("/api/playlist-info", (req, res) => {
+  if (!ytdlpReady) return notReady(res);
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
-  if (!fs.existsSync(YTDLP_PATH)) return res.status(500).json({ error: "yt-dlp not ready yet, please try again." });
   const ytdlp = spawn(YTDLP_PATH, ["--dump-json", "--flat-playlist", "--yes-playlist", url]);
   let stdout = "", stderr = "";
   ytdlp.stdout.on("data", c => stdout += c);
@@ -113,14 +127,18 @@ app.post("/api/playlist-info", (req, res) => {
         };
       });
       res.json({ videos, total: videos.length });
-    } catch(e) { res.status(500).json({ error: "Failed to parse playlist: " + e.message }); }
+    } catch(e) { res.status(500).json({ error: "Failed to parse playlist" }); }
   });
 });
 
 app.get("/api/download", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  if (!ytdlpReady) { send({ type:"error", text:"yt-dlp is still installing, please wait 30 seconds and try again." }); return res.end(); }
   const { url, quality = "Best available" } = req.query;
-  if (!url) return res.status(400).json({ error: "URL is required" });
-  if (!fs.existsSync(YTDLP_PATH)) { res.setHeader("Content-Type","text/event-stream"); return res.write(`data: ${JSON.stringify({type:"error",text:"yt-dlp not ready yet, please try again in a moment."})}\n\n`), res.end(); }
+  if (!url) { send({ type:"error", text:"URL is required" }); return res.end(); }
   const format = QUALITY_MAP[quality] || QUALITY_MAP["Best available"];
   const isAudio = quality === "Audio only (MP3)";
   const timestamp = Date.now();
@@ -130,76 +148,69 @@ app.get("/api/download", (req, res) => {
   if (isAudio) args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
   else args.push("--merge-output-format", "mp4");
   args.push(url);
-
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`);
   const ytdlp = spawn(YTDLP_PATH, args);
   ytdlp.stdout.on("data", chunk => {
     for (const line of chunk.toString().split("\n").filter(Boolean)) {
       const m = line.match(/(\d+(?:\.\d+)?)%/);
-      if (m) send({ type: "progress", percent: Math.round(parseFloat(m[1])), text: line.trim() });
+      if (m) send({ type:"progress", percent:Math.round(parseFloat(m[1])), text:line.trim() });
     }
   });
   ytdlp.stderr.on("data", chunk => {
     if (chunk.toString().toLowerCase().includes("error"))
-      send({ type: "error", text: chunk.toString().trim() });
+      send({ type:"error", text:chunk.toString().trim() });
   });
   ytdlp.on("close", code => {
-    if (code !== 0) { send({ type: "error", text: "Download failed." }); return res.end(); }
+    if (code !== 0) { send({ type:"error", text:"Download failed." }); return res.end(); }
     const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(String(timestamp)));
-    if (!files.length) send({ type: "error", text: "File not found after download." });
-    else send({ type: "done", filename: files[0] });
+    if (!files.length) send({ type:"error", text:"File not found after download." });
+    else send({ type:"done", filename:files[0] });
     res.end();
   });
   req.on("close", () => ytdlp.kill("SIGTERM"));
 });
 
 app.get("/api/download-playlist", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  if (!ytdlpReady) { send({ type:"error", text:"yt-dlp still installing, please wait and try again." }); return res.end(); }
   const { urls, quality = "Best available" } = req.query;
-  if (!urls) return res.status(400).json({ error: "No URLs provided" });
+  if (!urls) { send({ type:"error", text:"No URLs provided" }); return res.end(); }
   const videoUrls = JSON.parse(decodeURIComponent(urls));
   const format = QUALITY_MAP[quality] || QUALITY_MAP["Best available"];
   const isAudio = quality === "Audio only (MP3)";
   const timestamp = Date.now();
   const sessionDir = path.join(DOWNLOAD_DIR, `playlist_${timestamp}`);
   fs.mkdirSync(sessionDir, { recursive: true });
-
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`);
-
   let current = 0;
   const total = videoUrls.length;
   const downloadNext = () => {
     if (current >= total) {
-      send({ type: "progress", percent: 99, text: "Creating ZIP file…" });
+      send({ type:"progress", percent:99, text:"Creating ZIP file…" });
       try {
         const zipPath = path.join(DOWNLOAD_DIR, `playlist_${timestamp}.zip`);
-        const { execSync } = require("child_process");
-        execSync(`cd "${sessionDir}" && zip -r "${zipPath}" .`);
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-        send({ type: "done", filename: path.basename(zipPath) });
-      } catch(e) { send({ type: "error", text: "Failed to create ZIP: " + e.message }); }
+        require("child_process").execSync(`cd "${sessionDir}" && zip -r "${zipPath}" .`);
+        fs.rmSync(sessionDir, { recursive:true, force:true });
+        send({ type:"done", filename:path.basename(zipPath) });
+      } catch(e) { send({ type:"error", text:"Failed to create ZIP: "+e.message }); }
       return res.end();
     }
     const url = videoUrls[current];
-    const outputTemplate = path.join(sessionDir, `${current + 1}_%(title)s.%(ext)s`);
+    const outputTemplate = path.join(sessionDir, `${current+1}_%(title)s.%(ext)s`);
     const args = ["--format", format, "--output", outputTemplate, "--newline",
       "--progress-template", "%(progress._percent_str)s %(progress._speed_str)s", "--no-playlist"];
     if (isAudio) args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
     else args.push("--merge-output-format", "mp4");
     args.push(url);
-    send({ type: "progress", percent: Math.round((current / total) * 95), text: `Downloading video ${current + 1} of ${total}…` });
+    send({ type:"progress", percent:Math.round((current/total)*95), text:`Downloading video ${current+1} of ${total}…` });
     const ytdlp = spawn(YTDLP_PATH, args);
     ytdlp.stdout.on("data", chunk => {
       for (const line of chunk.toString().split("\n").filter(Boolean)) {
         const m = line.match(/(\d+(?:\.\d+)?)%/);
         if (m) {
-          const overall = Math.round((current / total) * 95 + (parseFloat(m[1]) / 100) * (95 / total));
-          send({ type: "progress", percent: overall, text: `Video ${current + 1}/${total}: ${line.trim()}` });
+          const overall = Math.round((current/total)*95+(parseFloat(m[1])/100)*(95/total));
+          send({ type:"progress", percent:overall, text:`Video ${current+1}/${total}: ${line.trim()}` });
         }
       }
     });
@@ -223,7 +234,7 @@ function formatDuration(s) {
 }
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  await installYtDlp();
+  installYtDlp();
 });
