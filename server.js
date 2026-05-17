@@ -12,24 +12,19 @@ app.use(express.json());
 const DOWNLOAD_DIR = path.join(os.tmpdir(), "yt-dlp-downloads");
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
-// Install yt-dlp binary on startup
-const YTDLP_PATH = path.join(os.homedir(), ".local", "bin", "yt-dlp");
-function installYtDlp() {
-  try {
-    if (!fs.existsSync(YTDLP_PATH)) {
-      console.log("Installing yt-dlp...");
-      fs.mkdirSync(path.dirname(YTDLP_PATH), { recursive: true });
-      execSync(`curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ${YTDLP_PATH}`);
-      execSync(`chmod a+rx ${YTDLP_PATH}`);
-      console.log("yt-dlp installed successfully!");
-    } else {
-      console.log("yt-dlp already installed.");
-    }
-  } catch (e) {
-    console.error("Failed to install yt-dlp:", e.message);
+// Download yt-dlp binary on startup
+const YTDLP_PATH = "/tmp/yt-dlp";
+try {
+  if (!fs.existsSync(YTDLP_PATH)) {
+    console.log("Downloading yt-dlp...");
+    execSync(`curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ${YTDLP_PATH} && chmod +x ${YTDLP_PATH}`);
+    console.log("yt-dlp ready!");
+  } else {
+    console.log("yt-dlp already present.");
   }
+} catch(e) {
+  console.error("Failed to download yt-dlp:", e.message);
 }
-installYtDlp();
 
 const QUALITY_MAP = {
   "Best available":   "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
@@ -40,7 +35,6 @@ const QUALITY_MAP = {
   "Audio only (MP3)": "bestaudio/best",
 };
 
-// ── Single video info ────────────────────────────────────────────────────────
 app.post("/api/info", (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
@@ -63,7 +57,6 @@ app.post("/api/info", (req, res) => {
   });
 });
 
-// ── Playlist info ────────────────────────────────────────────────────────────
 app.post("/api/playlist-info", (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
@@ -90,7 +83,6 @@ app.post("/api/playlist-info", (req, res) => {
   });
 });
 
-// ── Download single video (SSE) ──────────────────────────────────────────────
 app.get("/api/download", (req, res) => {
   const { url, quality = "Best available" } = req.query;
   if (!url) return res.status(400).json({ error: "URL is required" });
@@ -129,7 +121,6 @@ app.get("/api/download", (req, res) => {
   req.on("close", () => ytdlp.kill("SIGTERM"));
 });
 
-// ── Download playlist as ZIP (SSE) ───────────────────────────────────────────
 app.get("/api/download-playlist", (req, res) => {
   const { urls, quality = "Best available" } = req.query;
   if (!urls) return res.status(400).json({ error: "No URLs provided" });
@@ -182,7 +173,6 @@ app.get("/api/download-playlist", (req, res) => {
   downloadNext();
 });
 
-// ── Serve file ───────────────────────────────────────────────────────────────
 app.get("/api/file/:filename", (req, res) => {
   const filename = path.basename(req.params.filename);
   const filePath = path.join(DOWNLOAD_DIR, filename);
