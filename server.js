@@ -51,7 +51,7 @@ async function installYtDlp() {
       "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
       YTDLP_PATH
     );
-    fs.chmodSync(YTDLP_PATH, "755");
+    fs.chmodSync(YTDLP_PATH, 0o755);
     console.log("yt-dlp installed successfully!");
   } catch (e) {
     console.error("Failed to install yt-dlp:", e.message);
