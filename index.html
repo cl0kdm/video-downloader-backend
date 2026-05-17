@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Video Downloader</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --purple: #7F77DD;
+    --purple-light: #EEEDFE;
+    --purple-dark: #534AB7;
+    --teal: #1D9E75;
+    --teal-light: #E1F5EE;
+    --gray-50: #f9f9f9;
+    --gray-100: #f0f0f0;
+    --gray-200: #e0e0e0;
+    --gray-500: #888;
+    --gray-700: #444;
+    --gray-900: #111;
+    --red-bg: #fff0f0;
+    --red: #cc3333;
+    --green-bg: #edfff6;
+    --green: #0F6E56;
+    --radius: 10px;
+    --radius-sm: 6px;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--gray-50);
+    color: var(--gray-900);
+    min-height: 100vh;
+  }
+  header {
+    background: #fff;
+    border-bottom: 1px solid var(--gray-200);
+    padding: 0 2rem;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .logo { font-size: 16px; font-weight: 600; color: var(--purple-dark); display: flex; align-items: center; gap: 8px; }
+  .logo svg { width: 22px; height: 22px; }
+  .header-note { font-size: 12px; color: var(--gray-500); }
+  main {
+    max-width: 680px;
+    margin: 3rem auto;
+    padding: 0 1rem;
+  }
+  .hero { text-align: center; margin-bottom: 2.5rem; }
+  .hero h1 { font-size: 32px; font-weight: 700; margin-bottom: 10px; letter-spacing: -0.5px; }
+  .hero h1 span { color: var(--purple); }
+  .hero p { font-size: 15px; color: var(--gray-500); }
+  .search-box {
+    background: #fff;
+    border: 1.5px solid var(--gray-200);
+    border-radius: var(--radius);
+    padding: 6px 6px 6px 14px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 12px;
+    transition: border-color .2s;
+  }
+  .search-box:focus-within { border-color: var(--purple); }
+  .search-box input {
+    flex: 1;
+    border: none;
+    outline: none;
+    font-size: 15px;
+    background: transparent;
+    color: var(--gray-900);
+    min-width: 0;
+  }
+  .search-box input::placeholder { color: var(--gray-500); }
+  .plat-badge {
+    display: none;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .btn-primary {
+    background: var(--purple);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 10px 22px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s, opacity .15s;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--purple-dark); }
+  .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+  .platforms {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-bottom: 2rem;
+    justify-content: center;
+  }
+  .pill {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 500;
+    padding: 5px 12px; border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .alert {
+    padding: 12px 16px; border-radius: var(--radius-sm);
+    font-size: 13px; margin-bottom: 14px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .alert-err { background: var(--red-bg); color: var(--red); border: 1px solid #f5c6c6; }
+  .alert-ok  { background: var(--green-bg); color: var(--green); border: 1px solid #a3e6cb; }
+  .card {
+    background: #fff;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+  .thumb { position: relative; }
+  .thumb img { width: 100%; max-height: 220px; object-fit: cover; display: block; }
+  .dur { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,.75); color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+  .card-body { padding: 18px 20px; }
+  .vtitle { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .vmeta { font-size: 13px; color: var(--gray-500); margin-bottom: 16px; }
+  .dl-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .dl-row select {
+    flex: 1; min-width: 150px;
+    border: 1px solid var(--gray-200); border-radius: var(--radius-sm);
+    padding: 9px 12px; font-size: 13px; background: #fff;
+    color: var(--gray-900); outline: none; cursor: pointer;
+  }
+  .btn-dl {
+    background: var(--purple); color: #fff; border: none;
+    border-radius: var(--radius-sm); padding: 10px 20px;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: background .15s, opacity .15s; white-space: nowrap;
+  }
+  .btn-dl:hover:not(:disabled) { background: var(--purple-dark); }
+  .btn-dl:disabled { opacity: .45; cursor: not-allowed; }
+  .prog-wrap { margin-top: 14px; }
+  .prog-track { background: var(--gray-100); border-radius: 999px; height: 6px; overflow: hidden; margin-bottom: 6px; }
+  .prog-fill { height: 100%; background: var(--purple); border-radius: 999px; transition: width .3s ease; width: 0%; }
+  .prog-text { font-size: 12px; color: var(--gray-500); }
+  .spinner {
+    display: inline-block; width: 13px; height: 13px;
+    border: 2px solid #7F77DD44; border-top-color: var(--purple);
+    border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .reset-btn { background: none; border: none; font-size: 12px; cursor: pointer; text-decoration: underline; color: inherit; }
+  .live-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 500;
+    background: var(--teal-light); color: var(--green);
+    border: 1px solid #9FE1CB; padding: 4px 12px; border-radius: 999px;
+    margin-bottom: 14px;
+  }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  footer { text-align: center; font-size: 12px; color: var(--gray-500); padding: 3rem 1rem 2rem; }
+  footer a { color: var(--purple); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 15V3m0 12l-4-4m4 4l4-4M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17"/>
+    </svg>
+    VideoSave
+  </div>
+  <span class="header-note">Powered by yt-dlp · 1000+ sites</span>
+</header>
+
+<main>
+  <div class="hero">
+    <div style="display:flex;justify-content:center;margin-bottom:16px">
+      <div class="live-badge"><span class="live-dot"></span>Live — connected to backend</div>
+    </div>
+    <h1>Download any <span>video</span></h1>
+    <p>YouTube, Instagram, TikTok, Facebook, Twitter/X, Vimeo and thousands more</p>
+  </div>
+
+  <div id="alert-area"></div>
+
+  <div class="search-box">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input type="url" id="url-input" placeholder="Paste video link here…" autocomplete="off"/>
+    <div class="plat-badge" id="plat-badge"></div>
+    <button class="btn-primary" id="get-btn" disabled onclick="fetchInfo()">Get video</button>
+  </div>
+
+  <div class="platforms" id="platforms"></div>
+  <div id="video-card"></div>
+</main>
+
+<footer>
+  Built for educational purposes &nbsp;·&nbsp; Uses <a href="https://github.com/yt-dlp/yt-dlp" target="_blank">yt-dlp</a>
+</footer>
+
+<script>
+const API = "https://video-downloader-backend-production-7729.up.railway.app";
+
+const PLATFORMS = [
+  { name:"YouTube",   pattern:/youtube\.com|youtu\.be/, color:"#CC0000", bg:"#fff0f0" },
+  { name:"Instagram", pattern:/instagram\.com/,          color:"#C13584", bg:"#fdf0f7" },
+  { name:"TikTok",    pattern:/tiktok\.com/,             color:"#111111", bg:"#f0f0f0" },
+  { name:"Facebook",  pattern:/facebook\.com|fb\.watch/, color:"#1877F2", bg:"#eef4ff" },
+  { name:"Twitter/X", pattern:/twitter\.com|x\.com/,    color:"#1DA1F2", bg:"#eef8ff" },
+  { name:"Vimeo",     pattern:/vimeo\.com/,              color:"#1AB7EA", bg:"#eafaff" },
+  { name:"Dailymotion",pattern:/dailymotion\.com/,       color:"#0066DC", bg:"#eef3ff" },
+  { name:"Reddit",    pattern:/reddit\.com/,             color:"#FF4500", bg:"#fff3ee" },
+];
+const QUALITY = ["Best available","1080p","720p","480p","360p","Audio only (MP3)"];
+let stage = "idle", currentInfo = null, es = null;
+const $ = id => document.getElementById(id);
+
+document.getElementById("platforms").innerHTML = PLATFORMS.map(p =>
+  `<div class="pill" style="background:${p.bg};color:${p.color};border-color:${p.color}33">
+    <span class="dot" style="background:${p.color}"></span>${p.name}
+  </div>`).join("");
+
+$("url-input").addEventListener("input", function(){
+  const v = this.value.trim();
+  $("get-btn").disabled = !v;
+  const p = PLATFORMS.find(x => x.pattern.test(v));
+  const b = $("plat-badge");
+  if(p && v){
+    b.style.cssText = `display:flex;background:${p.bg};color:${p.color};border:1px solid ${p.color}44`;
+    b.innerHTML = `<span class="dot" style="background:${p.color}"></span>${p.name}`;
+  } else { b.style.display = "none"; }
+  if(stage !== "idle") resetState(true);
+});
+$("url-input").addEventListener("keydown", e => { if(e.key==="Enter") fetchInfo(); });
+
+function showAlert(type, msg, reset){
+  $("alert-area").innerHTML = `<div class="alert alert-${type}">${msg}${reset?`<button class="reset-btn" onclick="resetState()">Try another</button>`:""}</div>`;
+}
+function clearAlert(){ $("alert-area").innerHTML=""; }
+
+async function fetchInfo(){
+  const url = $("url-input").value.trim();
+  if(!url) return;
+  stage="fetching"; clearAlert();
+  $("video-card").innerHTML="";
+  $("get-btn").disabled=true;
+  $("get-btn").innerHTML=`<span class="spinner"></span>Fetching…`;
+  try{
+    const res = await fetch(`${API}/api/info`,{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({url}) });
+    if(!res.ok){ const e=await res.json(); throw new Error(e.error||"Failed to fetch info"); }
+    const data = await res.json();
+    currentInfo = {...data, url};
+    renderCard(data);
+    stage="ready";
+  } catch(e){
+    showAlert("err", `&#9888; ${e.message}`);
+    stage="idle";
+  } finally {
+    $("get-btn").disabled=false;
+    $("get-btn").innerHTML="Get video";
+  }
+}
+
+function renderCard(info){
+  $("video-card").innerHTML = `<div class="card">
+    ${info.thumbnail?`<div class="thumb"><img src="${info.thumbnail}" alt="thumbnail">${info.duration?`<div class="dur">${info.duration}</div>`:""}</div>`:""}
+    <div class="card-body">
+      <div class="vtitle">${info.title||"Untitled"}</div>
+      <div class="vmeta">${info.uploader||""}${info.view_count?" · "+Number(info.view_count).toLocaleString()+" views":""}</div>
+      <div class="dl-row">
+        <select id="quality-select">${QUALITY.map(q=>`<option>${q}</option>`).join("")}</select>
+        <button class="btn-dl" id="dl-btn" onclick="startDownload()">&#8595; Download</button>
+      </div>
+      <div id="prog-wrap" style="display:none" class="prog-wrap">
+        <div class="prog-track"><div class="prog-fill" id="prog-fill"></div></div>
+        <div class="prog-text" id="prog-text">Starting…</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function startDownload(){
+  const url = $("url-input").value.trim();
+  const quality = $("quality-select").value;
+  stage="downloading";
+  $("dl-btn").disabled=true;
+  $("dl-btn").innerHTML=`<span class="spinner"></span>Downloading…`;
+  $("prog-wrap").style.display="block";
+  setProgress(0,"Connecting…"); clearAlert();
+  if(es) es.close();
+  es = new EventSource(`${API}/api/download?url=${encodeURIComponent(url)}&quality=${encodeURIComponent(quality)}`);
+  es.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if(msg.type==="progress"){ setProgress(msg.percent, msg.text); }
+    else if(msg.type==="done"){
+      setProgress(100,"Complete!"); stage="done";
+      showAlert("ok","&#10003; Download complete! Your file is saving…", true);
+      window.open(`${API}/api/file/${msg.filename}`,"_blank");
+      $("dl-btn").disabled=false;
+      $("dl-btn").innerHTML="&#8595; Download again";
+      es.close();
+    } else if(msg.type==="error"){
+      showAlert("err",`&#9888; ${msg.text}`, true);
+      stage="ready"; $("dl-btn").disabled=false;
+      $("dl-btn").innerHTML="&#8595; Download"; es.close();
+    }
+  };
+  es.onerror = () => {
+    showAlert("err","&#9888; Connection lost. Check your backend is running.", true);
+    stage="ready"; $("dl-btn").disabled=false;
+    $("dl-btn").innerHTML="&#8595; Download";
+    if(es) es.close();
+  };
+}
+
+function setProgress(pct, text){
+  const f=$("prog-fill"), t=$("prog-text");
+  if(f) f.style.width=Math.round(pct)+"%";
+  if(t) t.textContent=text||"";
+}
+
+function resetState(soft){
+  if(!soft){ $("url-input").value=""; $("plat-badge").style.display="none"; $("get-btn").disabled=true; }
+  $("video-card").innerHTML=""; clearAlert(); stage="idle"; currentInfo=null;
+  if(es){ es.close(); es=null; }
+}
+</script>
+</body>
+</html>
