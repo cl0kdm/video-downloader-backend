@@ -1,0 +1,103 @@
+const express = require("express");
+const cors = require("cors");
+const { spawn } = require("child_process");
+const path = require("path");
+const fs = require("fs");
+const os = require("os");
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const DOWNLOAD_DIR = path.join(os.tmpdir(), "yt-dlp-downloads");
+if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
+
+const QUALITY_MAP = {
+  "Best available":   "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+  "1080p":            "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]",
+  "720p":             "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]",
+  "480p":             "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]",
+  "360p":             "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]",
+  "Audio only (MP3)": "bestaudio/best",
+};
+
+app.post("/api/info", (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: "URL is required" });
+
+  const ytdlp = spawn("yt-dlp", ["--dump-json", "--no-playlist", url]);
+  let stdout = "", stderr = "";
+  ytdlp.stdout.on("data", c => stdout += c);
+  ytdlp.stderr.on("data", c => stderr += c);
+  ytdlp.on("close", code => {
+    if (code !== 0) return res.status(500).json({ error: stderr || "yt-dlp failed" });
+    try {
+      const info = JSON.parse(stdout);
+      res.json({
+        title:      info.title,
+        uploader:   info.uploader || info.channel || "Unknown",
+        thumbnail:  info.thumbnail,
+        duration:   formatDuration(info.duration),
+        view_count: info.view_count,
+      });
+    } catch { res.status(500).json({ error: "Failed to parse info" }); }
+  });
+});
+
+app.get("/api/download", (req, res) => {
+  const { url, quality = "Best available" } = req.query;
+  if (!url) return res.status(400).json({ error: "URL is required" });
+
+  const format = QUALITY_MAP[quality] || QUALITY_MAP["Best available"];
+  const isAudio = quality === "Audio only (MP3)";
+  const timestamp = Date.now();
+  const outputTemplate = path.join(DOWNLOAD_DIR, `${timestamp}_%(title)s.%(ext)s`);
+
+  const args = ["--no-playlist", "--format", format, "--output", outputTemplate, "--newline",
+    "--progress-template", "%(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s"];
+  if (isAudio) args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
+  else args.push("--merge-output-format", "mp4");
+  args.push(url);
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const ytdlp = spawn("yt-dlp", args);
+
+  ytdlp.stdout.on("data", chunk => {
+    for (const line of chunk.toString().split("\n").filter(Boolean)) {
+      const m = line.match(/(\d+(?:\.\d+)?)%/);
+      if (m) send({ type: "progress", percent: Math.round(parseFloat(m[1])), text: line.trim() });
+    }
+  });
+  ytdlp.stderr.on("data", chunk => {
+    if (chunk.toString().toLowerCase().includes("error"))
+      send({ type: "error", text: chunk.toString().trim() });
+  });
+  ytdlp.on("close", code => {
+    if (code !== 0) { send({ type: "error", text: "Download failed." }); return res.end(); }
+    const files = fs.readdirSync(DOWNLOAD_DIR).filter(f => f.startsWith(String(timestamp)));
+    if (!files.length) send({ type: "error", text: "File not found after download." });
+    else send({ type: "done", filename: files[0] });
+    res.end();
+  });
+  req.on("close", () => ytdlp.kill("SIGTERM"));
+});
+
+app.get("/api/file/:filename", (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const filePath = path.join(DOWNLOAD_DIR, filename);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "File not found" });
+  res.download(filePath, filename, err => { if (!err) fs.unlink(filePath, () => {}); });
+});
+
+function formatDuration(s) {
+  if (!s) return "";
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+  return h > 0 ? `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}` : `${m}:${String(sec).padStart(2,"0")}`;
+}
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
