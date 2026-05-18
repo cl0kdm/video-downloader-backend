@@ -1,10 +1,9 @@
 const express = require("express");
 const cors = require("cors");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const https = require("https");
 
 const app = express();
 app.use(cors({ origin: "*", methods: ["GET", "POST"], allowedHeaders: ["Content-Type"] }));
@@ -13,60 +12,8 @@ app.use(express.json());
 const DOWNLOAD_DIR = path.join(os.tmpdir(), "yt-dlp-downloads");
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
-const YTDLP_PATH = "/tmp/yt-dlp";
-let ytdlpReady = false;
-
-function downloadFile(url, dest) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest, { mode: 0o755 });
-    const request = (reqUrl) => {
-      https.get(reqUrl, (res) => {
-        if ([301,302,307,308].includes(res.statusCode)) {
-          request(res.headers.location);
-          return;
-        }
-        if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode}`));
-          return;
-        }
-        res.pipe(file);
-        file.on("finish", () => {
-          file.close(() => {
-            // Set executable permission after file is fully closed
-            try {
-              fs.chmodSync(dest, 0o755);
-              resolve();
-            } catch(e) {
-              reject(e);
-            }
-          });
-        });
-        file.on("error", (e) => { fs.unlink(dest, () => {}); reject(e); });
-      }).on("error", reject);
-    };
-    request(url);
-  });
-}
-
-async function installYtDlp() {
-  try {
-    if (fs.existsSync(YTDLP_PATH)) {
-      fs.chmodSync(YTDLP_PATH, 0o755);
-      ytdlpReady = true;
-      console.log("yt-dlp already installed and ready.");
-      return;
-    }
-    console.log("Downloading yt-dlp...");
-    await downloadFile(
-      "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
-      YTDLP_PATH
-    );
-    ytdlpReady = true;
-    console.log("yt-dlp installed successfully!");
-  } catch(e) {
-    console.error("yt-dlp install failed:", e.message);
-  }
-}
+// yt-dlp installed at build time via Dockerfile
+const YTDLP_PATH = "/app/bin/yt-dlp";
 
 const QUALITY_MAP = {
   "Best available":   "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
@@ -77,12 +24,7 @@ const QUALITY_MAP = {
   "Audio only (MP3)": "bestaudio/best",
 };
 
-function notReady(res) {
-  return res.status(503).json({ error: "yt-dlp is still installing, please wait 30 seconds and try again." });
-}
-
 app.post("/api/info", (req, res) => {
-  if (!ytdlpReady) return notReady(res);
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
   const ytdlp = spawn(YTDLP_PATH, ["--dump-json", "--no-playlist", url]);
@@ -105,7 +47,6 @@ app.post("/api/info", (req, res) => {
 });
 
 app.post("/api/playlist-info", (req, res) => {
-  if (!ytdlpReady) return notReady(res);
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
   const ytdlp = spawn(YTDLP_PATH, ["--dump-json", "--flat-playlist", "--yes-playlist", url]);
@@ -136,9 +77,8 @@ app.get("/api/download", (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`);
-  if (!ytdlpReady) { send({ type:"error", text:"yt-dlp is still installing, please wait 30 seconds and try again." }); return res.end(); }
   const { url, quality = "Best available" } = req.query;
-  if (!url) { send({ type:"error", text:"URL is required" }); return res.end(); }
+  if (!url) { send({ type:"error", text:"URL required" }); return res.end(); }
   const format = QUALITY_MAP[quality] || QUALITY_MAP["Best available"];
   const isAudio = quality === "Audio only (MP3)";
   const timestamp = Date.now();
@@ -174,7 +114,6 @@ app.get("/api/download-playlist", (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`);
-  if (!ytdlpReady) { send({ type:"error", text:"yt-dlp still installing, please wait and try again." }); return res.end(); }
   const { urls, quality = "Best available" } = req.query;
   if (!urls) { send({ type:"error", text:"No URLs provided" }); return res.end(); }
   const videoUrls = JSON.parse(decodeURIComponent(urls));
@@ -190,7 +129,7 @@ app.get("/api/download-playlist", (req, res) => {
       send({ type:"progress", percent:99, text:"Creating ZIP file…" });
       try {
         const zipPath = path.join(DOWNLOAD_DIR, `playlist_${timestamp}.zip`);
-        require("child_process").execSync(`cd "${sessionDir}" && zip -r "${zipPath}" .`);
+        execSync(`cd "${sessionDir}" && zip -r "${zipPath}" .`);
         fs.rmSync(sessionDir, { recursive:true, force:true });
         send({ type:"done", filename:path.basename(zipPath) });
       } catch(e) { send({ type:"error", text:"Failed to create ZIP: "+e.message }); }
@@ -234,7 +173,4 @@ function formatDuration(s) {
 }
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  installYtDlp();
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
