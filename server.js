@@ -1,9 +1,10 @@
 const express = require("express");
 const cors = require("cors");
-const { spawn, execSync } = require("child_process");
+const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const archiver = require("archiver");
 
 const app = express();
 app.use(cors({ origin: "*", methods: ["GET", "POST"], allowedHeaders: ["Content-Type"] }));
@@ -12,7 +13,6 @@ app.use(express.json());
 const DOWNLOAD_DIR = path.join(os.tmpdir(), "yt-dlp-downloads");
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
-// yt-dlp installed at build time via Dockerfile
 const YTDLP_PATH = "/app/bin/yt-dlp";
 
 const QUALITY_MAP = {
@@ -122,18 +122,37 @@ app.get("/api/download-playlist", (req, res) => {
   const timestamp = Date.now();
   const sessionDir = path.join(DOWNLOAD_DIR, `playlist_${timestamp}`);
   fs.mkdirSync(sessionDir, { recursive: true });
+
   let current = 0;
   const total = videoUrls.length;
+
+  const createZip = (sourceDir, zipPath) => {
+    return new Promise((resolve, reject) => {
+      const output = fs.createWriteStream(zipPath);
+      const archive = archiver("zip", { zlib: { level: 6 } });
+      output.on("close", resolve);
+      archive.on("error", reject);
+      archive.pipe(output);
+      archive.directory(sourceDir, false);
+      archive.finalize();
+    });
+  };
+
   const downloadNext = () => {
     if (current >= total) {
       send({ type:"progress", percent:99, text:"Creating ZIP file…" });
-      try {
-        const zipPath = path.join(DOWNLOAD_DIR, `playlist_${timestamp}.zip`);
-        execSync(`cd "${sessionDir}" && zip -r "${zipPath}" .`);
-        fs.rmSync(sessionDir, { recursive:true, force:true });
-        send({ type:"done", filename:path.basename(zipPath) });
-      } catch(e) { send({ type:"error", text:"Failed to create ZIP: "+e.message }); }
-      return res.end();
+      const zipPath = path.join(DOWNLOAD_DIR, `playlist_${timestamp}.zip`);
+      createZip(sessionDir, zipPath)
+        .then(() => {
+          fs.rmSync(sessionDir, { recursive:true, force:true });
+          send({ type:"done", filename:`playlist_${timestamp}.zip` });
+          res.end();
+        })
+        .catch(e => {
+          send({ type:"error", text:"Failed to create ZIP: " + e.message });
+          res.end();
+        });
+      return;
     }
     const url = videoUrls[current];
     const outputTemplate = path.join(sessionDir, `${current+1}_%(title)s.%(ext)s`);
