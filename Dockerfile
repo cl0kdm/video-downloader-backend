@@ -20,4 +20,5 @@ RUN npm install
 COPY server.js ./
 
 EXPOSE 3001
+COPY cookies.txt /app/cookies.txt
 CMD ["node", "server.js"]
