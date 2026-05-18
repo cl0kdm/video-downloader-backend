@@ -27,7 +27,7 @@ const QUALITY_MAP = {
 app.post("/api/info", (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
-  const ytdlp = spawn(YTDLP_PATH, ["--dump-json", "--no-playlist", url]);
+  const ytdlp = spawn(YTDLP_PATH, ["--dump-json", "--no-playlist", "--extractor-args", "youtube:player_client=web,default", url]);
   let stdout = "", stderr = "";
   ytdlp.stdout.on("data", c => stdout += c);
   ytdlp.stderr.on("data", c => stderr += c);
@@ -49,7 +49,7 @@ app.post("/api/info", (req, res) => {
 app.post("/api/playlist-info", (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
-  const ytdlp = spawn(YTDLP_PATH, ["--dump-json", "--flat-playlist", "--yes-playlist", url]);
+  const ytdlp = spawn(YTDLP_PATH, ["--dump-json", "--flat-playlist", "--yes-playlist", "--extractor-args", "youtube:player_client=web,default", url]);
   let stdout = "", stderr = "";
   ytdlp.stdout.on("data", c => stdout += c);
   ytdlp.stderr.on("data", c => stderr += c);
@@ -84,7 +84,8 @@ app.get("/api/download", (req, res) => {
   const timestamp = Date.now();
   const outputTemplate = path.join(DOWNLOAD_DIR, `${timestamp}_%(title)s.%(ext)s`);
   const args = ["--no-playlist", "--format", format, "--output", outputTemplate, "--newline",
-    "--progress-template", "%(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s"];
+    "--progress-template", "%(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s",
+    "--extractor-args", "youtube:player_client=web,default"];
   if (isAudio) args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
   else args.push("--merge-output-format", "mp4");
   args.push(url);
@@ -157,7 +158,8 @@ app.get("/api/download-playlist", (req, res) => {
     const url = videoUrls[current];
     const outputTemplate = path.join(sessionDir, `${current+1}_%(title)s.%(ext)s`);
     const args = ["--format", format, "--output", outputTemplate, "--newline",
-      "--progress-template", "%(progress._percent_str)s %(progress._speed_str)s", "--no-playlist"];
+      "--progress-template", "%(progress._percent_str)s %(progress._speed_str)s", "--no-playlist",
+      "--extractor-args", "youtube:player_client=web,default"];
     if (isAudio) args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
     else args.push("--merge-output-format", "mp4");
     args.push(url);
