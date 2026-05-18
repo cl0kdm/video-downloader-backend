@@ -14,7 +14,10 @@ const DOWNLOAD_DIR = path.join(os.tmpdir(), "yt-dlp-downloads");
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
 const YTDLP_PATH = "/app/bin/yt-dlp";
-const YT_ARGS = ["--extractor-args", "youtube:player_client=web,default"];
+const YT_ARGS = [
+  "--extractor-args", "youtube:player_client=web,default",
+  "--cookies", "/app/cookies.txt"
+];
 
 const QUALITY_MAP = {
   "Best available":   "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
