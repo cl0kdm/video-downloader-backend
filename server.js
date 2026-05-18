@@ -14,6 +14,7 @@ const DOWNLOAD_DIR = path.join(os.tmpdir(), "yt-dlp-downloads");
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
 const YTDLP_PATH = "/app/bin/yt-dlp";
+const YT_ARGS = ["--extractor-args", "youtube:player_client=web,default"];
 
 const QUALITY_MAP = {
   "Best available":   "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
@@ -24,52 +25,83 @@ const QUALITY_MAP = {
   "Audio only (MP3)": "bestaudio/best",
 };
 
-app.post("/api/info", (req, res) => {
+function runYtdlp(args) {
+  return new Promise((resolve, reject) => {
+    let stdout = "", stderr = "";
+    const p = spawn(YTDLP_PATH, args);
+    p.stdout.on("data", c => stdout += c);
+    p.stderr.on("data", c => stderr += c);
+    p.on("close", code => code === 0 ? resolve(stdout) : reject(new Error(stderr)));
+  });
+}
+
+function spawnYtdlpWithProgress(args, onProgress) {
+  return new Promise((resolve) => {
+    const p = spawn(YTDLP_PATH, args);
+    p.stdout.on("data", chunk => {
+      for (const line of chunk.toString().split("\n").filter(Boolean)) {
+        const m = line.match(/(\d+(?:\.\d+)?)%/);
+        if (m) onProgress(parseFloat(m[1]), line.trim());
+      }
+    });
+    p.on("close", () => resolve());
+  });
+}
+
+function createZip(sourceDir, zipPath) {
+  return new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver("zip", { zlib: { level: 6 } });
+    output.on("close", () => {
+      console.log("ZIP created, size:", archive.pointer(), "bytes");
+      resolve();
+    });
+    archive.on("error", reject);
+    archive.pipe(output);
+    // Add files individually to ensure they're all included
+    const files = fs.readdirSync(sourceDir);
+    console.log("Files to zip:", files);
+    for (const file of files) {
+      archive.file(path.join(sourceDir, file), { name: file });
+    }
+    archive.finalize();
+  });
+}
+
+app.post("/api/info", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
-  const ytdlp = spawn(YTDLP_PATH, ["--dump-json", "--no-playlist", "--extractor-args", "youtube:player_client=web,default", url]);
-  let stdout = "", stderr = "";
-  ytdlp.stdout.on("data", c => stdout += c);
-  ytdlp.stderr.on("data", c => stderr += c);
-  ytdlp.on("close", code => {
-    if (code !== 0) return res.status(500).json({ error: stderr || "yt-dlp failed" });
-    try {
-      const info = JSON.parse(stdout);
-      res.json({
-        title:      info.title,
-        uploader:   info.uploader || info.channel || "Unknown",
-        thumbnail:  info.thumbnail,
-        duration:   formatDuration(info.duration),
-        view_count: info.view_count,
-      });
-    } catch { res.status(500).json({ error: "Failed to parse info" }); }
-  });
+  try {
+    const stdout = await runYtdlp(["--dump-json", "--no-playlist", ...YT_ARGS, url]);
+    const info = JSON.parse(stdout);
+    res.json({
+      title:      info.title,
+      uploader:   info.uploader || info.channel || "Unknown",
+      thumbnail:  info.thumbnail,
+      duration:   formatDuration(info.duration),
+      view_count: info.view_count,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post("/api/playlist-info", (req, res) => {
+app.post("/api/playlist-info", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
-  const ytdlp = spawn(YTDLP_PATH, ["--dump-json", "--flat-playlist", "--yes-playlist", "--extractor-args", "youtube:player_client=web,default", url]);
-  let stdout = "", stderr = "";
-  ytdlp.stdout.on("data", c => stdout += c);
-  ytdlp.stderr.on("data", c => stderr += c);
-  ytdlp.on("close", code => {
-    if (code !== 0) return res.status(500).json({ error: stderr || "Failed to fetch playlist" });
-    try {
-      const videos = stdout.trim().split("\n").filter(Boolean).map((line, i) => {
-        const v = JSON.parse(line);
-        return {
-          index: i, id: v.id,
-          title: v.title || `Video ${i + 1}`,
-          duration: formatDuration(v.duration),
-          thumbnail: v.thumbnail || v.thumbnails?.[0]?.url || null,
-          url: v.url || v.webpage_url || `https://www.youtube.com/watch?v=${v.id}`,
-          uploader: v.uploader || v.channel || ""
-        };
-      });
-      res.json({ videos, total: videos.length });
-    } catch(e) { res.status(500).json({ error: "Failed to parse playlist" }); }
-  });
+  try {
+    const stdout = await runYtdlp(["--dump-json", "--flat-playlist", "--yes-playlist", ...YT_ARGS, url]);
+    const videos = stdout.trim().split("\n").filter(Boolean).map((line, i) => {
+      const v = JSON.parse(line);
+      return {
+        index: i, id: v.id,
+        title: v.title || `Video ${i + 1}`,
+        duration: formatDuration(v.duration),
+        thumbnail: v.thumbnail || v.thumbnails?.[0]?.url || null,
+        url: v.url || v.webpage_url || `https://www.youtube.com/watch?v=${v.id}`,
+        uploader: v.uploader || v.channel || ""
+      };
+    });
+    res.json({ videos, total: videos.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get("/api/download", (req, res) => {
@@ -83,9 +115,12 @@ app.get("/api/download", (req, res) => {
   const isAudio = quality === "Audio only (MP3)";
   const timestamp = Date.now();
   const outputTemplate = path.join(DOWNLOAD_DIR, `${timestamp}_%(title)s.%(ext)s`);
-  const args = ["--no-playlist", "--format", format, "--output", outputTemplate, "--newline",
+  const args = [
+    "--no-playlist", "--format", format,
+    "--output", outputTemplate, "--newline",
     "--progress-template", "%(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s",
-    "--extractor-args", "youtube:player_client=web,default"];
+    ...YT_ARGS
+  ];
   if (isAudio) args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
   else args.push("--merge-output-format", "mp4");
   args.push(url);
@@ -110,74 +145,57 @@ app.get("/api/download", (req, res) => {
   req.on("close", () => ytdlp.kill("SIGTERM"));
 });
 
-app.get("/api/download-playlist", (req, res) => {
+app.get("/api/download-playlist", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`);
   const { urls, quality = "Best available" } = req.query;
   if (!urls) { send({ type:"error", text:"No URLs provided" }); return res.end(); }
+
   const videoUrls = JSON.parse(decodeURIComponent(urls));
   const format = QUALITY_MAP[quality] || QUALITY_MAP["Best available"];
   const isAudio = quality === "Audio only (MP3)";
   const timestamp = Date.now();
   const sessionDir = path.join(DOWNLOAD_DIR, `playlist_${timestamp}`);
   fs.mkdirSync(sessionDir, { recursive: true });
-
-  let current = 0;
   const total = videoUrls.length;
 
-  const createZip = (sourceDir, zipPath) => {
-    return new Promise((resolve, reject) => {
-      const output = fs.createWriteStream(zipPath);
-      const archive = archiver("zip", { zlib: { level: 6 } });
-      output.on("close", resolve);
-      archive.on("error", reject);
-      archive.pipe(output);
-      archive.directory(sourceDir, false);
-      archive.finalize();
-    });
-  };
-
-  const downloadNext = () => {
-    if (current >= total) {
-      send({ type:"progress", percent:99, text:"Creating ZIP file…" });
-      const zipPath = path.join(DOWNLOAD_DIR, `playlist_${timestamp}.zip`);
-      createZip(sessionDir, zipPath)
-        .then(() => {
-          fs.rmSync(sessionDir, { recursive:true, force:true });
-          send({ type:"done", filename:`playlist_${timestamp}.zip` });
-          res.end();
-        })
-        .catch(e => {
-          send({ type:"error", text:"Failed to create ZIP: " + e.message });
-          res.end();
-        });
-      return;
-    }
-    const url = videoUrls[current];
-    const outputTemplate = path.join(sessionDir, `${current+1}_%(title)s.%(ext)s`);
-    const args = ["--format", format, "--output", outputTemplate, "--newline",
-      "--progress-template", "%(progress._percent_str)s %(progress._speed_str)s", "--no-playlist",
-      "--extractor-args", "youtube:player_client=web,default"];
+  for (let i = 0; i < total; i++) {
+    const url = videoUrls[i];
+    const outputTemplate = path.join(sessionDir, `${i+1}_%(title)s.%(ext)s`);
+    const args = [
+      "--format", format, "--output", outputTemplate, "--newline",
+      "--progress-template", "%(progress._percent_str)s %(progress._speed_str)s",
+      "--no-playlist", ...YT_ARGS
+    ];
     if (isAudio) args.push("--extract-audio", "--audio-format", "mp3", "--audio-quality", "0");
     else args.push("--merge-output-format", "mp4");
     args.push(url);
-    send({ type:"progress", percent:Math.round((current/total)*95), text:`Downloading video ${current+1} of ${total}…` });
-    const ytdlp = spawn(YTDLP_PATH, args);
-    ytdlp.stdout.on("data", chunk => {
-      for (const line of chunk.toString().split("\n").filter(Boolean)) {
-        const m = line.match(/(\d+(?:\.\d+)?)%/);
-        if (m) {
-          const overall = Math.round((current/total)*95+(parseFloat(m[1])/100)*(95/total));
-          send({ type:"progress", percent:overall, text:`Video ${current+1}/${total}: ${line.trim()}` });
-        }
-      }
+
+    send({ type:"progress", percent:Math.round((i/total)*95), text:`Downloading video ${i+1} of ${total}…` });
+
+    // Await each download fully before moving to next
+    await spawnYtdlpWithProgress(args, (pct, text) => {
+      const overall = Math.round((i/total)*95 + (pct/100)*(95/total));
+      send({ type:"progress", percent:overall, text:`Video ${i+1}/${total}: ${text}` });
     });
-    ytdlp.on("close", () => { current++; downloadNext(); });
-    req.on("close", () => ytdlp.kill("SIGTERM"));
-  };
-  downloadNext();
+  }
+
+  send({ type:"progress", percent:98, text:"All videos downloaded, creating ZIP…" });
+
+  // Wait a moment to ensure all file handles are released
+  await new Promise(r => setTimeout(r, 2000));
+
+  const zipPath = path.join(DOWNLOAD_DIR, `playlist_${timestamp}.zip`);
+  try {
+    await createZip(sessionDir, zipPath);
+    fs.rmSync(sessionDir, { recursive:true, force:true });
+    send({ type:"done", filename:`playlist_${timestamp}.zip` });
+  } catch(e) {
+    send({ type:"error", text:"Failed to create ZIP: " + e.message });
+  }
+  res.end();
 });
 
 app.get("/api/file/:filename", (req, res) => {
