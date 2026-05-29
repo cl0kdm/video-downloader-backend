@@ -15,8 +15,10 @@ if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR);
 
 const YTDLP_PATH = "/app/bin/yt-dlp";
 const YT_ARGS = [
-  "--extractor-args", "youtube:player_client=web,default",
-  "--cookies", "/app/cookies.txt"
+  "--extractor-args", `youtube:player_client=web,default`,
+  "--cookies", "/app/cookies.txt",
+  "--sleep-requests", "2",
+  "--sleep-interval", "3"
 ];
 
 const QUALITY_MAP = {
